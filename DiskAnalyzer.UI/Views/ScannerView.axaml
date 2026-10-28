@@ -1,0 +1,52 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:DiskAnalyzer.UI.ViewModels"
+             xmlns:tdg="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.TreeDataGrid"
+             x:Class="DiskAnalyzer.UI.Views.ScannerView"
+             x:DataType="vm:ScannerViewModel">
+
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" Margin="16">
+
+    <TextBlock Grid.Row="0" Text="{Binding ScanRootPath}"
+               FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" />
+
+    <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,8">
+      <ProgressBar Value="{Binding ProgressPercent}" Maximum="100" Height="22" />
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="{Binding CurrentPath}" TextTrimming="CharacterEllipsis" />
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="{Binding ProcessedInfo}" />
+          <Button Content="Отмена" Command="{Binding CancelCommand}" />
+          <Button Content="Найти дубликаты" Command="{Binding FindDuplicatesCommand}" />
+          <Button Content="Индексировать" Command="{Binding IndexResultCommand}" />
+        </StackPanel>
+      </Grid>
+    </StackPanel>
+
+    <TextBlock Grid.Row="2" Text="{Binding Summary}" FontWeight="SemiBold" Margin="0,4,0,8" />
+    <TextBlock Grid.Row="2" Text="{Binding ErrorMessage}" Foreground="Red" />
+
+    <Grid Grid.Row="3" RowDefinitions="*,Auto">
+      <tdg:TreeDataGrid Grid.Row="0" Source="{Binding TreeSource}" Height="400" />
+    </Grid>
+
+    <Grid Grid.Row="4" ColumnDefinitions="2*,*">
+      <TextBlock Grid.ColumnSpan="2" Text="Топ-50 крупнейших файлов:"
+                 FontWeight="SemiBold" Margin="0,12,0,4" VerticalAlignment="Top" />
+
+      <ListBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding TopFiles}" Margin="0,24,8,0">
+        <ListBox.ItemTemplate>
+          <DataTemplate DataType="vm:FileEntryViewModel">
+            <Grid ColumnDefinitions="*,120,140">
+              <TextBlock Grid.Column="0" Text="{Binding FullPath}" TextTrimming="CharacterEllipsis" />
+              <TextBlock Grid.Column="1" Text="{Binding DisplaySize}" HorizontalAlignment="Right" />
+              <TextBlock Grid.Column="2" Text="{Binding DisplayDate}" HorizontalAlignment="Right" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Grid>
+
+  </Grid>
+
+</UserControl>

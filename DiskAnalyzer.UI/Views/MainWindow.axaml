@@ -1,0 +1,28 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DiskAnalyzer.UI.ViewModels"
+        x:Class="DiskAnalyzer.UI.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Disk Analyzer"
+        Width="1200" Height="800"
+        WindowStartupLocation="CenterScreen">
+
+  <TabControl SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
+    <TabItem Header="Диски">
+      <ContentControl Content="{Binding DriveList}" />
+    </TabItem>
+    <TabItem Header="Сканер">
+      <ContentControl Content="{Binding Scanner}" />
+    </TabItem>
+    <TabItem Header="Дубликаты">
+      <ContentControl Content="{Binding Duplicates}" />
+    </TabItem>
+    <TabItem Header="Поиск">
+      <ContentControl Content="{Binding Search}" />
+    </TabItem>
+    <TabItem Header="Индексация">
+      <ContentControl Content="{Binding Indexing}" />
+    </TabItem>
+  </TabControl>
+
+</Window>

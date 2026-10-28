@@ -1,0 +1,29 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:DiskAnalyzer.UI.ViewModels"
+             xmlns:models="using:DiskAnalyzer.Domain.Models"
+             x:Class="DiskAnalyzer.UI.Views.DriveListView"
+             x:DataType="vm:DriveListViewModel">
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
+      <Button Content="Обновить" Command="{Binding RefreshCommand}" />
+      <Button Content="Сканировать" Command="{Binding ScanCommand}" />
+    </StackPanel>
+
+    <ListBox ItemsSource="{Binding Drives}" SelectedItem="{Binding SelectedDrive, Mode=TwoWay}">
+      <ListBox.ItemTemplate>
+        <DataTemplate DataType="models:DriveInfoModel">
+          <Grid ColumnDefinitions="200,120,120,80,*" Margin="4,8">
+            <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontWeight="SemiBold" />
+            <TextBlock Grid.Column="1" Text="{Binding FileSystem}" />
+            <TextBlock Grid.Column="2" Text="{Binding Kind}" />
+            <TextBlock Grid.Column="3" Text="{Binding UsedPercent, StringFormat={}{0:0.#}%}" />
+            <ProgressBar Grid.Column="4" Value="{Binding UsedPercent}" Maximum="100" Height="16" />
+          </Grid>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+  </DockPanel>
+
+</UserControl>

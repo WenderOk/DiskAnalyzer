@@ -1,0 +1,39 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:DiskAnalyzer.UI.ViewModels"
+             x:Class="DiskAnalyzer.UI.Views.DuplicatesView"
+             x:DataType="vm:DuplicatesViewModel">
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+      <Grid ColumnDefinitions="*,Auto">
+        <ProgressBar Grid.Column="0" Value="{Binding ProgressPercent}" Maximum="100" Height="22" />
+        <Button Grid.Column="1" Content="Отмена" Command="{Binding CancelCommand}" Margin="8,0,0,0" />
+      </Grid>
+      <TextBlock Text="{Binding Status}" />
+      <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" />
+      <TextBlock Text="{Binding ErrorMessage}" Foreground="Red" />
+    </StackPanel>
+
+    <ListBox ItemsSource="{Binding Groups}">
+      <ListBox.ItemTemplate>
+        <DataTemplate DataType="vm:DuplicateGroupViewModel">
+          <Expander Header="{Binding DisplaySize, StringFormat='Размер: {0}'}">
+            <StackPanel Spacing="4">
+              <TextBlock Text="{Binding Count, StringFormat='Копий: {0}'}" />
+              <TextBlock Text="{Binding DisplayWasted, StringFormat='Можно освободить: {0}'}" />
+              <ItemsControl ItemsSource="{Binding Files}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:FileEntryViewModel">
+                    <TextBlock Text="{Binding FullPath}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Expander>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+  </DockPanel>
+
+</UserControl>

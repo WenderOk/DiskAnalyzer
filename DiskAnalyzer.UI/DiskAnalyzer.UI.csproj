@@ -1,0 +1,48 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <AssemblyName>DiskAnalyzer.UI</AssemblyName>
+    <RootNamespace>DiskAnalyzer.UI</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Controls.TreeDataGrid" Version="11.0.10" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.5">
+      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DiskAnalyzer.Application\DiskAnalyzer.Application.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Domain\DiskAnalyzer.Domain.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Infrastructure\DiskAnalyzer.Infrastructure.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Worker.Client\DiskAnalyzer.Worker.Client.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Worker\DiskAnalyzer.Worker.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+<Target Name="CopyWorker" AfterTargets="Build">
+  <ItemGroup>
+    <WorkerFiles Include="..\DiskAnalyzer.Worker\bin\$(Configuration)\net8.0\DiskAnalyzer.Worker*" />
+  </ItemGroup>
+  <Copy SourceFiles="@(WorkerFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+</Target>
+
+</Project>
