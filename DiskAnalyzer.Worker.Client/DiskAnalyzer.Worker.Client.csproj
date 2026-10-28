@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DiskAnalyzer.Domain\DiskAnalyzer.Domain.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Worker.Contracts\DiskAnalyzer.Worker.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

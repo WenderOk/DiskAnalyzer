@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>DiskAnalyzer.Worker</AssemblyName>
+    <RootNamespace>DiskAnalyzer.Worker</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DiskAnalyzer.Application\DiskAnalyzer.Application.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Domain\DiskAnalyzer.Domain.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Infrastructure\DiskAnalyzer.Infrastructure.csproj" />
+    <ProjectReference Include="..\DiskAnalyzer.Worker.Contracts\DiskAnalyzer.Worker.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>
