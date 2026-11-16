@@ -10,6 +10,10 @@ public static class Frames
     public static async Task WriteAsync<T>(Stream stream, T message, CancellationToken ct)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(message, JsonOptions.Default);
+        if (payload.Length > MaxFrameSize)
+            throw new InvalidOperationException(
+                $"Кадр слишком большой: {payload.Length:N0} байт (лимит {MaxFrameSize:N0}).");
+
         var header = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
 

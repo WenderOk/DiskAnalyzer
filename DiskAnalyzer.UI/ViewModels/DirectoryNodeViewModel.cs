@@ -1,31 +1,41 @@
 using System.Collections.ObjectModel;
 using DiskAnalyzer.Domain.Models;
+using DiskAnalyzer.Worker.Contracts;
 
 namespace DiskAnalyzer.UI.ViewModels;
 
+/// <summary>
+/// Ленивое представление каталога: дочерние VM создаются только при первом
+/// обращении (то есть когда строка раскрывается в TreeDataGrid).
+/// </summary>
 public sealed class DirectoryNodeViewModel : ViewModelBase
 {
-    public DirectoryNodeViewModel(DirectoryNode node)
+    private readonly IReadOnlyList<DirectoryEntryPayload> _entries;
+    private readonly IReadOnlyList<int>[] _childIndices;
+    private readonly int _index;
+    private ObservableCollection<DirectoryNodeViewModel>? _children;
+
+    public DirectoryNodeViewModel(
+        IReadOnlyList<DirectoryEntryPayload> entries,
+        IReadOnlyList<int>[] childIndices,
+        int index)
     {
-        Name = node.Name;
-        FullPath = node.FullPath;
-        TotalSize = node.TotalSize;
-        FileCount = node.FileCount;
-        FolderCount = node.FolderCount;
-        Files = node.Files.Select(f => new FileEntryViewModel(f)).ToList();
-        Children = new ObservableCollection<DirectoryNodeViewModel>(
-            node.Children
-                .OrderByDescending(c => c.TotalSize.Bytes)
-                .Select(c => new DirectoryNodeViewModel(c)));
+        _entries = entries;
+        _childIndices = childIndices;
+        _index = index;
     }
 
-    public string Name { get; }
-    public string FullPath { get; }
-    public FileSize TotalSize { get; }
-    public long FileCount { get; }
-    public long FolderCount { get; }
-    public IReadOnlyList<FileEntryViewModel> Files { get; }
-    public ObservableCollection<DirectoryNodeViewModel> Children { get; }
+    public string Name => _entries[_index].Name;
+    public FileSize TotalSize => new(_entries[_index].TotalSizeBytes);
+    public long FileCount => _entries[_index].FileCount;
+    public long FolderCount => _entries[_index].FolderCount;
 
     public string DisplaySize => TotalSize.ToHumanReadable();
+    public string DisplayFileCount => FileCount.ToString("N0");
+    public string DisplayFolderCount => FolderCount.ToString("N0");
+
+    public ObservableCollection<DirectoryNodeViewModel> Children => _children ??= new(
+        _childIndices[_index]
+            .OrderByDescending(i => _entries[i].TotalSizeBytes)
+            .Select(i => new DirectoryNodeViewModel(_entries, _childIndices, i)));
 }

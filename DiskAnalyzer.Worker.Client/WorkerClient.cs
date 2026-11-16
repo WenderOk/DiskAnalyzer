@@ -10,14 +10,19 @@ public sealed class WorkerClient : IAsyncDisposable
 {
     private readonly WorkerClientOptions _options;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly ConcurrentDictionary<string, IPendingOperation> _pending = new();
-    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly ConcurrentQueue<string> _stderrTail = new();
+
+    private CancellationTokenSource _lifetimeCts = new();
 
     private Process? _process;
     private NamedPipeClientStream? _pipe;
     private Task? _readerTask;
     private Task? _stderrTask;
     private volatile bool _started;
+    private volatile bool _stopping;
+    private int _disposed;
 
     public WorkerClient(WorkerClientOptions options)
     {
@@ -28,80 +33,124 @@ public sealed class WorkerClient : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken ct = default)
     {
-        if (_started)
-            throw new InvalidOperationException("WorkerClient уже запущен.");
-
-        var executable = ResolveWorkerExecutable();
-
-        var psi = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = false,
-            CreateNoWindow = true
-        };
-
-        _process = Process.Start(psi)
-            ?? throw new WorkerException("Не удалось запустить процесс Worker.");
-
-        _stderrTask = Task.Run(() => DrainStderrAsync(_process, _lifetimeCts.Token));
-
-        var readyLine = await ReadReadyLineAsync(
-            _process.StandardOutput, _options.ConnectTimeout, ct);
-
-        if (readyLine is null || !readyLine.StartsWith(WorkerCommands.ReadyPrefix))
-        {
-            TryKill();
-            throw new WorkerException("Worker не подтвердил готовность.");
-        }
-
-        var pipeName = readyLine[WorkerCommands.ReadyPrefix.Length..];
-
-        _pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-
-        using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        connectCts.CancelAfter(_options.ConnectTimeout);
-
+        await _lifecycleLock.WaitAsync(ct);
         try
         {
-            await _pipe.ConnectAsync(connectCts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            TryKill();
-            throw new WorkerException("Таймаут подключения к Worker.");
-        }
+            if (_started)
+                return;
 
-        _started = true;
-        _readerTask = Task.Run(() => ReadLoopAsync(_pipe, _lifetimeCts.Token));
+            CleanupProcess();
+
+            if (_lifetimeCts.IsCancellationRequested)
+            {
+                _lifetimeCts.Dispose();
+                _lifetimeCts = new CancellationTokenSource();
+            }
+
+            while (_stderrTail.TryDequeue(out _)) { }
+
+            var executable = ResolveWorkerExecutable();
+
+            var psi = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = false,
+                CreateNoWindow = true,
+                WorkingDirectory = AppContext.BaseDirectory
+            };
+
+            var process = Process.Start(psi)
+                ?? throw new WorkerException("Не удалось запустить процесс Worker.");
+            _process = process;
+            process.EnableRaisingEvents = true;
+            process.Exited += OnProcessExited;
+
+            _stderrTask = Task.Run(() => DrainStderrAsync(process, _lifetimeCts.Token));
+
+            var readyLine = await ReadReadyLineAsync(
+                process.StandardOutput, _options.ConnectTimeout, ct);
+
+            if (readyLine is null || !readyLine.StartsWith(WorkerCommands.ReadyPrefix))
+            {
+                CleanupProcess();
+                throw new WorkerException("Worker не подтвердил готовность.");
+            }
+
+            var pipeName = readyLine[WorkerCommands.ReadyPrefix.Length..];
+
+            _pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            connectCts.CancelAfter(_options.ConnectTimeout);
+
+            try
+            {
+                await _pipe.ConnectAsync(connectCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                CleanupProcess();
+                throw new WorkerException("Таймаут подключения к Worker.");
+            }
+
+            _started = true;
+            _readerTask = Task.Run(() => ReadLoopAsync(_pipe, _lifetimeCts.Token));
+        }
+        catch
+        {
+            CleanupProcess();
+            throw;
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
     }
 
     public async Task StopAsync()
     {
-        if (!_started)
-            return;
-
-        _started = false;
-        _lifetimeCts.Cancel();
-
-        try { if (_pipe is not null) await _pipe.DisposeAsync(); }
-        catch { }
-
-        TryKill();
-
-        if (_process is not null)
+        await _lifecycleLock.WaitAsync();
+        try
         {
-            try { await _process.WaitForExitAsync().WaitAsync(_options.ShutdownTimeout); }
-            catch { }
+            if (!_started && _process is null && _pipe is null)
+                return;
+
+            _stopping = true;
+            _started = false;
+
+            try { _lifetimeCts.Cancel(); } catch { }
+
+            if (_pipe is not null)
+            {
+                try { await _pipe.DisposeAsync(); } catch { }
+                _pipe = null;
+            }
+
+            if (_process is not null)
+            {
+                try
+                {
+                    await _process.WaitForExitAsync().WaitAsync(_options.ShutdownTimeout);
+                }
+                catch
+                {
+                    TryKill();
+                    try { await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+                }
+            }
+
+            if (_readerTask is not null) { try { await _readerTask; } catch { } }
+            if (_stderrTask is not null) { try { await _stderrTask; } catch { } }
+
+            CleanupProcess();
         }
-
-        if (_readerTask is not null) { try { await _readerTask; } catch { } }
-        if (_stderrTask is not null) { try { await _stderrTask; } catch { } }
-
-        if (_pipe is not null) { await _pipe.DisposeAsync(); _pipe = null; }
-        _process?.Dispose();
-        _process = null;
+        finally
+        {
+            _stopping = false;
+            _lifecycleLock.Release();
+        }
     }
 
     public async Task PingAsync(CancellationToken ct = default)
@@ -111,6 +160,7 @@ public sealed class WorkerClient : IAsyncDisposable
             id => new WorkerRequest { RequestId = id, Command = WorkerCommands.Ping },
             _ => true);
 
+        using var reg = ct.Register(op.Cancel);
         await op.Result.WaitAsync(ct);
     }
 
@@ -206,8 +256,12 @@ public sealed class WorkerClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         await StopAsync();
         _writeLock.Dispose();
+        _lifecycleLock.Dispose();
         _lifetimeCts.Dispose();
     }
 
@@ -218,6 +272,7 @@ public sealed class WorkerClient : IAsyncDisposable
     {
         Task? pump = null;
         using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var cancelReg = ct.Register(op.Cancel);
 
         if (progress is not null)
         {
@@ -256,7 +311,8 @@ public sealed class WorkerClient : IAsyncDisposable
         var operation = new WorkerOperation<T>(
             requestId,
             _lifetimeCts.Token,
-            id => SendCancelSafe(id),
+            SendCancelSafe,
+            id => _pending.TryRemove(id, out _),
             extractResult);
 
         _pending[requestId] = operation;
@@ -302,7 +358,8 @@ public sealed class WorkerClient : IAsyncDisposable
         await _writeLock.WaitAsync(ct);
         try
         {
-            await Frames.WriteAsync(pipe, request, ct);
+            // См. комментарий в WorkerHost: не рвём кадр посередине.
+            await Frames.WriteAsync(pipe, request, CancellationToken.None);
         }
         finally
         {
@@ -312,6 +369,7 @@ public sealed class WorkerClient : IAsyncDisposable
 
     private async Task ReadLoopAsync(Stream stream, CancellationToken ct)
     {
+        Exception? failure = null;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -322,11 +380,18 @@ public sealed class WorkerClient : IAsyncDisposable
                     response = await Frames.ReadAsync<WorkerResponse>(stream, ct);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (IOException) { break; }
+                catch (IOException ex)
+                {
+                    failure = new WorkerException($"Ошибка канала Worker: {ex.Message}", ex);
+                    break;
+                }
                 catch (ObjectDisposedException) { break; }
 
                 if (response is null)
+                {
+                    failure = new WorkerException("Соединение с Worker закрыто.");
                     break;
+                }
 
                 if (_pending.TryGetValue(response.RequestId, out var operation))
                     operation.HandleResponse(response);
@@ -334,11 +399,20 @@ public sealed class WorkerClient : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            FailAllPending(new WorkerException("Ошибка чтения канала Worker.", ex));
-            return;
+            failure = new WorkerException("Ошибка чтения канала Worker.", ex);
         }
 
-        FailAllPending(new WorkerException("Соединение с Worker закрыто."));
+        if (ct.IsCancellationRequested)
+            return;
+
+        _started = false;
+        FailAllPending(failure ?? new WorkerException("Соединение с Worker закрыто."));
+
+        if (_pipe is not null)
+        {
+            try { await _pipe.DisposeAsync(); } catch { }
+            _pipe = null;
+        }
     }
 
     private void FailAllPending(Exception ex)
@@ -347,6 +421,50 @@ public sealed class WorkerClient : IAsyncDisposable
         {
             if (_pending.TryRemove(requestId, out var operation))
                 operation.Fail(ex);
+        }
+    }
+
+    private void OnProcessExited(object? sender, EventArgs e)
+    {
+        if (_stopping || !ReferenceEquals(sender, _process))
+            return;
+
+        var exitCode = "неизвестен";
+        try { if (_process is not null) exitCode = _process.ExitCode.ToString(); } catch { }
+
+        var stderr = LastStderr();
+        var message = $"Worker завершился неожиданно (код {exitCode}).";
+        if (!string.IsNullOrWhiteSpace(stderr))
+            message += $" Последние сообщения: {stderr}";
+
+        _started = false;
+        FailAllPending(new WorkerException(message));
+    }
+
+    private string? LastStderr()
+    {
+        if (_stderrTail.IsEmpty)
+            return null;
+
+        return string.Join(" | ", _stderrTail.TakeLast(10));
+    }
+
+    private void CleanupProcess()
+    {
+        _started = false;
+
+        if (_process is not null)
+        {
+            try { _process.Exited -= OnProcessExited; } catch { }
+            TryKill();
+            _process.Dispose();
+            _process = null;
+        }
+
+        if (_pipe is not null)
+        {
+            try { _pipe.Dispose(); } catch { }
+            _pipe = null;
         }
     }
 
@@ -380,7 +498,7 @@ public sealed class WorkerClient : IAsyncDisposable
         catch (OperationCanceledException) { return null; }
     }
 
-    private static async Task DrainStderrAsync(Process process, CancellationToken ct)
+    private async Task DrainStderrAsync(Process process, CancellationToken ct)
     {
         try
         {
@@ -388,6 +506,11 @@ public sealed class WorkerClient : IAsyncDisposable
             {
                 var line = await process.StandardError.ReadLineAsync(ct);
                 if (line is null) break;
+
+                _stderrTail.Enqueue(line);
+                while (_stderrTail.Count > 50)
+                    _stderrTail.TryDequeue(out _);
+
                 Debug.WriteLine($"[Worker stderr] {line}");
             }
         }

@@ -39,10 +39,20 @@ public sealed class ScanFilter
 
     private bool IsUnderExcludedPath(string fullPath)
     {
-        foreach (var path in ExcludedPaths)
+        foreach (var excluded in ExcludedPaths)
         {
-            if (fullPath.StartsWith(path, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(excluded))
+                continue;
+
+            var path = excluded.TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (fullPath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(path + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
         }
         return false;
     }

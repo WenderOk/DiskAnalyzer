@@ -73,7 +73,7 @@ public sealed class DuplicateFinderService
 
         var stillCandidates = byPartialHash.Values.Where(l => l.Count > 1).ToList();
         if (stillCandidates.Count == 0)
-            return Array.Empty<DuplicateGroup>();
+             return Array.Empty<DuplicateGroup>();
 
         var totalPhase2 = stillCandidates.Sum(l => l.Count);
         var processedPhase2 = 0;
@@ -111,7 +111,7 @@ public sealed class DuplicateFinderService
             });
         }
 
-        return results;
+         return results;
     }
 
     private static void Report(IProgress<ScanProgress>? progress, string message, int done, int total)

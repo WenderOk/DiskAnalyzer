@@ -12,7 +12,8 @@ public sealed class DriveCatalogService
         _driveService = driveService;
     }
 
-    public IReadOnlyList<DriveInfoModel> GetAllDrives() => _driveService.GetAllDrives();
+    public IReadOnlyList<DriveInfoModel> GetAllDrives(bool includeSystem = false) =>
+        _driveService.GetAllDrives(includeSystem);
 
     public DriveInfoModel? GetDriveForPath(string path) => _driveService.GetDrive(path);
 }

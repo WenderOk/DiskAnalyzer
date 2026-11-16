@@ -16,6 +16,7 @@ public sealed class WorkerOperation<T> : IDisposable, IPendingOperation
     private readonly CancellationTokenSource _cts;
     private readonly Func<WorkerResponse, T> _extractResult;
     private readonly Action<string>? _cancelSender;
+    private readonly Action<string>? _onCompleted;
 
     private int _completed;
     private int _cancelSent;
@@ -25,16 +26,19 @@ public sealed class WorkerOperation<T> : IDisposable, IPendingOperation
         string requestId,
         CancellationToken parentToken,
         Action<string>? cancelSender,
+        Action<string>? onCompleted,
         Func<WorkerResponse, T> extractResult)
     {
         RequestId = requestId;
         _cancelSender = cancelSender;
+        _onCompleted = onCompleted;
         _extractResult = extractResult;
 
-        _progress = Channel.CreateUnbounded<ScanProgressPayload>(new UnboundedChannelOptions
+        _progress = Channel.CreateBounded<ScanProgressPayload>(new BoundedChannelOptions(64)
         {
             SingleReader = true,
-            SingleWriter = false
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest
         });
         _result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         _cts = CancellationTokenSource.CreateLinkedTokenSource(parentToken);
@@ -47,6 +51,7 @@ public sealed class WorkerOperation<T> : IDisposable, IPendingOperation
             SendCancel();
             _progress.Writer.TryComplete();
             _result.TrySetCanceled();
+            _onCompleted?.Invoke(RequestId);
         });
     }
 
@@ -57,14 +62,28 @@ public sealed class WorkerOperation<T> : IDisposable, IPendingOperation
 
     public Task<T> Result => _result.Task;
 
-    public void Cancel() => _cts.Cancel();
+    public void Cancel()
+    {
+        if (Volatile.Read(ref _completed) != 0 || Volatile.Read(ref _disposed) != 0)
+            return;
+
+        try { _cts.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        _progress.Writer.TryComplete();
+        if (Interlocked.CompareExchange(ref _completed, 1, 0) == 0)
+        {
+            SendCancel();
+            _progress.Writer.TryComplete();
+            _result.TrySetCanceled();
+            _onCompleted?.Invoke(RequestId);
+        }
+
         _cts.Dispose();
     }
 
@@ -104,6 +123,7 @@ public sealed class WorkerOperation<T> : IDisposable, IPendingOperation
 
         _progress.Writer.TryComplete();
         _result.TrySetException(ex);
+        _onCompleted?.Invoke(RequestId);
     }
 
     private void CompleteWith(Func<T> extractor)
@@ -122,6 +142,10 @@ public sealed class WorkerOperation<T> : IDisposable, IPendingOperation
             _progress.Writer.TryComplete();
             _result.TrySetException(ex);
         }
+        finally
+        {
+            _onCompleted?.Invoke(RequestId);
+        }
     }
 
     private void CompleteCancelled()
@@ -131,6 +155,7 @@ public sealed class WorkerOperation<T> : IDisposable, IPendingOperation
 
         _progress.Writer.TryComplete();
         _result.TrySetCanceled();
+        _onCompleted?.Invoke(RequestId);
     }
 
     private void SendCancel()

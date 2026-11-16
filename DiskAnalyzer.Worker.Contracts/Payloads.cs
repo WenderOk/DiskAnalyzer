@@ -20,24 +20,28 @@ public sealed record ScanProgressPayload(
 
 public sealed record FileEntryPayload(
     string FullPath,
-    string Name,
-    string Extension,
-    string DirectoryPath,
     long SizeBytes,
     DateTime LastModified,
     DateTime Created);
 
-public sealed record DirectoryNodePayload(
-    string FullPath,
+/// <summary>
+/// Плоская запись каталога. ParentIndex ссылается на запись-родителя
+/// (для корня равен -1), поэтому дерево собирается на клиенте без рекурсии.
+/// </summary>
+public sealed record DirectoryEntryPayload(
+    int ParentIndex,
     string Name,
     long TotalSizeBytes,
     long FileCount,
-    long FolderCount,
-    IReadOnlyList<DirectoryNodePayload> Children,
-    IReadOnlyList<FileEntryPayload> Files);
+    long FolderCount);
 
 public sealed record ScanResultPayload(
-    DirectoryNodePayload Root,
+    string ScanId,
+    IReadOnlyList<DirectoryEntryPayload> Directories,
+    IReadOnlyList<FileEntryPayload> TopFiles,
+    long TotalSizeBytes,
+    long FileCount,
+    long FolderCount,
     DateTime StartedAt,
     DateTime CompletedAt,
     string Phase,
@@ -47,6 +51,10 @@ public sealed record DuplicateGroupPayload(
     string ContentHash,
     long FileSizeBytes,
     IReadOnlyList<FileEntryPayload> Files);
+
+public sealed record DuplicateResultPayload(
+    IReadOnlyList<DuplicateGroupPayload> Groups,
+    long SkippedUnreadableFiles);
 
 public sealed record IndexResultPayload(
     long ProcessedFiles,

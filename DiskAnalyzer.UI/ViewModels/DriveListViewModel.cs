@@ -25,13 +25,16 @@ public sealed partial class DriveListViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(HasSelection))]
     private DriveInfoModel? _selectedDrive;
 
+    [ObservableProperty]
+    private bool _showSystemDrives;
+
     public bool HasSelection => SelectedDrive is not null;
 
     [RelayCommand]
     private void Refresh()
     {
         var currentRoot = SelectedDrive?.RootPath;
-        var drives = _driveCatalog.GetAllDrives();
+        var drives = _driveCatalog.GetAllDrives(ShowSystemDrives);
         Drives = new ObservableCollection<DriveInfoModel>(drives);
         SelectedDrive = Drives.FirstOrDefault(d => d.RootPath == currentRoot) ?? Drives.FirstOrDefault();
     }
@@ -45,4 +48,6 @@ public sealed partial class DriveListViewModel : ViewModelBase
 
     partial void OnSelectedDriveChanged(DriveInfoModel? value)
         => ScanCommand.NotifyCanExecuteChanged();
+
+    partial void OnShowSystemDrivesChanged(bool value) => Refresh();
 }

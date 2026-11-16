@@ -10,8 +10,10 @@ internal sealed class ScanContext
     private readonly int _reportIntervalMs;
 
     private long _files;
+    private long _folders;
     private long _bytes;
     private long _lastReportTick;
+    private int _phase = (int)ScanPhase.Enumerating;
     private string _currentPath = string.Empty;
 
     public int MaxDegreeOfParallelism { get; }
@@ -19,7 +21,7 @@ internal sealed class ScanContext
     public ScanContext(int maxDegreeOfParallelism, long expectedTotalBytes,
         IProgress<ScanProgress>? progress, int reportIntervalMs = 100)
     {
-        MaxDegreeOfParallelism = maxDegreeOfParallelism;
+        MaxDegreeOfParallelism = Math.Max(1, maxDegreeOfParallelism);
         _expectedTotalBytes = expectedTotalBytes;
         _progress = progress;
         _reportIntervalMs = reportIntervalMs;
@@ -32,6 +34,15 @@ internal sealed class ScanContext
         Volatile.Write(ref _currentPath, path);
         TryReport(false);
     }
+
+    public void ReportDirectory(string path)
+    {
+        Interlocked.Increment(ref _folders);
+        Volatile.Write(ref _currentPath, path);
+        TryReport(false);
+    }
+
+     public void SetPhase(ScanPhase phase) => Volatile.Write(ref _phase, (int)phase);
 
     public void TryReport(bool force)
     {
@@ -49,11 +60,12 @@ internal sealed class ScanContext
 
         _progress.Report(new ScanProgress
         {
-            Phase = ScanPhase.Enumerating,
+            Phase = (ScanPhase)Volatile.Read(ref _phase),
             CurrentPath = Volatile.Read(ref _currentPath),
             ProcessedFiles = Interlocked.Read(ref _files),
+            ProcessedFolders = Interlocked.Read(ref _folders),
             ProcessedSize = new FileSize(processedBytes),
-            Percent = percent
+            Percent = percent,
         });
     }
 }

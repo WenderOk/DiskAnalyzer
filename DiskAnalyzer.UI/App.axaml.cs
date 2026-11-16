@@ -1,14 +1,11 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using DiskAnalyzer.Application.Abstractions;
 using DiskAnalyzer.Application.Drives;
-using DiskAnalyzer.Application.Duplicates;
-using DiskAnalyzer.Application.Indexing;
-using DiskAnalyzer.Application.Scanning;
 using DiskAnalyzer.Application.Searching;
 using DiskAnalyzer.Infrastructure.FileSystem;
-using DiskAnalyzer.Infrastructure.Hashing;
 using DiskAnalyzer.Infrastructure.Index;
 using DiskAnalyzer.UI.ViewModels;
 using DiskAnalyzer.UI.Views;
@@ -37,23 +34,38 @@ public sealed partial class App : Avalonia.Application
         base.OnFrameworkInitializationCompleted();
     }
 
+    private bool _shutdownStarted;
+
     private void OnShutdownRequested(object? sender, ShutdownRequestedEventArgs e)
     {
-        var worker = Services.GetService<WorkerClient>();
-        if (worker is not null)
+        if (_shutdownStarted)
+            return;
+
+        _shutdownStarted = true;
+        e.Cancel = true;
+
+        // Нельзя блокировать UI-поток ожиданием Worker: даём ему корректно
+        // отменить операции и завершиться, после чего закрываем приложение.
+        Dispatcher.UIThread.Post(async () =>
         {
-            try { worker.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3)); }
+            try
+            {
+                var worker = Services.GetService<WorkerClient>();
+                if (worker is not null)
+                    await worker.DisposeAsync();
+            }
             catch { }
-        }
+
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+                desktop.Shutdown();
+        });
     }
 
     private static IServiceProvider BuildServices()
     {
         var services = new ServiceCollection();
 
-        services.AddSingleton<IFileSystemService, FileSystemService>();
         services.AddSingleton<IDriveService, DriveService>();
-        services.AddSingleton<IHashService, HashService>();
 
         services.AddSingleton<ISearchIndex>(_ =>
         {
@@ -67,9 +79,6 @@ public sealed partial class App : Avalonia.Application
             });
         });
 
-        services.AddSingleton<ScanService>();
-        services.AddSingleton<DuplicateFinderService>();
-        services.AddSingleton<IndexingService>();
         services.AddSingleton<SearchService>();
         services.AddSingleton<DriveCatalogService>();
 

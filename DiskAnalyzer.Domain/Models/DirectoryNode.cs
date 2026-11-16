@@ -7,8 +7,12 @@ public sealed class DirectoryNode
     public DirectoryNode? Parent { get; set; }
 
     public List<DirectoryNode> Children { get; } = new();
-    public List<FileEntry> Files { get; } = new();
 
+    /// <summary>Размер/количество файлов только в этом каталоге, без потомков.</summary>
+    public FileSize OwnSize { get; set; }
+    public long OwnFileCount { get; set; }
+
+    /// <summary>Итоговые значения по каталогу и всем его потомкам.</summary>
     public FileSize TotalSize { get; set; }
     public long FileCount { get; set; }
     public long FolderCount { get; set; }

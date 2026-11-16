@@ -1,6 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using DiskAnalyzer.Domain.Models;
 using DiskAnalyzer.Worker.Client;
 using DiskAnalyzer.Worker.Contracts;
 
@@ -51,11 +50,13 @@ public sealed partial class IndexingViewModel : ViewModelBase
             {
                 ProgressPercent = p.Percent;
                 CurrentPath = p.CurrentPath;
-                ProcessedInfo = $"{p.ProcessedFiles:N0} файлов · {new FileSize(p.ProcessedSizeBytes).ToHumanReadable()}";
+                ProcessedInfo = $"{p.ProcessedFiles:N0} файлов";
             });
 
-            await _worker.IndexAsync(path, progress, ct: _cts.Token);
-            Summary = "Индексация завершена. Можно переходить на вкладку «Поиск».";
+            var result = await _worker.IndexAsync(path, progress, ct: _cts.Token);
+            ProgressPercent = 100;
+            Summary = $"Индексация завершена: {result.ProcessedFiles:N0} обработано, " +
+                      $"{result.IndexedFiles:N0} добавлено в индекс.";
         }
         catch (OperationCanceledException)
         {

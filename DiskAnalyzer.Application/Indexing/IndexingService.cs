@@ -26,7 +26,7 @@ public sealed class IndexingService
         _index = index;
     }
 
-    public async Task IndexAsync(
+    public async Task<IndexingResult> IndexAsync(
         string rootPath,
         ScanFilter? filter = null,
         IndexingOptions? options = null,
@@ -57,6 +57,7 @@ public sealed class IndexingService
         try
         {
             await Task.WhenAll(producer, consumer);
+            return new IndexingResult(await producer, await consumer);
         }
         catch
         {
@@ -66,7 +67,7 @@ public sealed class IndexingService
         }
     }
 
-    private async Task ProduceAsync(
+    private async Task<long> ProduceAsync(
         string rootPath,
         ScanFilter filter,
         IndexingOptions options,
@@ -97,60 +98,51 @@ public sealed class IndexingService
         {
             writer.Complete();
         }
+
+        return processed;
     }
 
-    private async Task ConsumeAsync(
+    private async Task<long> ConsumeAsync(
         ChannelReader<IndexedFile> reader,
         IndexingOptions options,
         CancellationToken ct)
     {
         var batch = new List<IndexedFile>(options.BatchSize);
+        long indexed = 0;
         await foreach (var file in reader.ReadAllAsync(ct))
         {
             batch.Add(file);
             if (batch.Count >= options.BatchSize)
             {
                 await _index.AddOrUpdateAsync(batch, ct);
+                indexed += batch.Count;
                 batch.Clear();
             }
         }
 
         if (batch.Count > 0)
+        {
             await _index.AddOrUpdateAsync(batch, ct);
+            indexed += batch.Count;
+        }
+
+        return indexed;
     }
 
     private async Task TraverseAsync(
-        string path,
+        string rootPath,
         ScanFilter filter,
         IndexingOptions options,
         Func<IndexedFile, CancellationToken, Task> onFile,
         CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-
-        foreach (var file in _fileSystem.EnumerateFiles(path))
+        var work = Channel.CreateUnbounded<WorkItem>(new UnboundedChannelOptions
         {
-            ct.ThrowIfCancellationRequested();
-            if (file.IsReparsePoint) continue;
-
-            var size = new FileSize(file.Size);
-            if (filter.IsExcludedFile(file.FullPath, file.Extension, size, file.IsHidden, file.IsSystem))
-                continue;
-
-            string? preview = null;
-            if (options.ExtractContentPreview && TextExtensions.Contains(file.Extension))
-                preview = await ReadPreviewAsync(file.FullPath, options.MaxPreviewChars, ct);
-
-            await onFile(new IndexedFile
-            {
-                FullPath = file.FullPath,
-                Name = file.Name,
-                Extension = file.Extension,
-                Size = size,
-                LastModified = file.LastModified,
-                ContentPreview = preview
-            }, ct);
-        }
+            SingleReader = false,
+            SingleWriter = false
+        });
+        var state = new QueueState { Pending = 1 };
+        work.Writer.TryWrite(new WorkItem(rootPath, 0));
 
         var parallelOptions = new ParallelOptions
         {
@@ -159,17 +151,72 @@ public sealed class IndexingService
         };
 
         await Parallel.ForEachAsync(
-            _fileSystem.EnumerateDirectories(path),
+            work.Reader.ReadAllAsync(ct),
             parallelOptions,
-            async (directory, token) =>
+            async (item, token) =>
             {
-                if (directory.IsReparsePoint) return;
-                if (filter.IsExcludedDirectory(
-                        directory.FullPath, directory.Name, directory.IsHidden, directory.IsSystem))
-                    return;
-
-                await TraverseAsync(directory.FullPath, filter, options, onFile, token);
+                await ProcessDirectoryAsync(item, filter, options, onFile, work.Writer, state, token);
+                if (Interlocked.Decrement(ref state.Pending) == 0)
+                    work.Writer.TryComplete();
             });
+    }
+
+    private async Task ProcessDirectoryAsync(
+        WorkItem item,
+        ScanFilter filter,
+        IndexingOptions options,
+        Func<IndexedFile, CancellationToken, Task> onFile,
+        ChannelWriter<WorkItem> writer,
+        QueueState state,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        try
+        {
+            foreach (var entry in _fileSystem.EnumerateEntries(item.Path, ct))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (entry.IsReparsePoint) continue;
+
+                if (entry.IsDirectory)
+                {
+                    if (item.Depth >= filter.MaxDepth) continue;
+                    if (filter.IsExcludedDirectory(entry.FullPath, entry.Name, entry.IsHidden, entry.IsSystem))
+                        continue;
+
+                    Interlocked.Increment(ref state.Pending);
+                    writer.TryWrite(new WorkItem(entry.FullPath, item.Depth + 1));
+                    continue;
+                }
+
+                var size = new FileSize(entry.Size);
+                if (filter.IsExcludedFile(entry.FullPath, entry.Extension, size, entry.IsHidden, entry.IsSystem))
+                    continue;
+
+                string? preview = null;
+                if (options.ExtractContentPreview && TextExtensions.Contains(entry.Extension))
+                    preview = await ReadPreviewAsync(entry.FullPath, options.MaxPreviewChars, ct);
+
+                await onFile(new IndexedFile
+                {
+                    FullPath = entry.FullPath,
+                    Name = entry.Name,
+                    Extension = entry.Extension,
+                    Size = size,
+                    LastModified = entry.LastModified,
+                    ContentPreview = preview
+                }, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Каталог стал недоступен во время обхода — пропускаем его.
+        }
     }
 
     private async Task<string?> ReadPreviewAsync(string path, int maxChars, CancellationToken ct)
@@ -187,4 +234,13 @@ public sealed class IndexingService
         catch (IOException) { return null; }
         catch (UnauthorizedAccessException) { return null; }
     }
+
+    private readonly record struct WorkItem(string Path, int Depth);
+
+    private sealed class QueueState
+    {
+        public int Pending;
+    }
 }
+
+public sealed record IndexingResult(long ProcessedFiles, long IndexedFiles);

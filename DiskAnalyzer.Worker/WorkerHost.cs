@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Threading.Channels;
+using DiskAnalyzer.Application.Abstractions;
 using DiskAnalyzer.Application.Duplicates;
 using DiskAnalyzer.Application.Indexing;
 using DiskAnalyzer.Application.Scanning;
+using DiskAnalyzer.Domain.Enums;
 using DiskAnalyzer.Domain.Models;
 using DiskAnalyzer.Worker.Contracts;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,8 +14,6 @@ namespace DiskAnalyzer.Worker;
 
 public sealed class WorkerHost
 {
-    private const int MaxCachedScans = 8;
-
     private readonly IServiceProvider _services;
 
     public WorkerHost(IServiceProvider services)
@@ -51,6 +51,7 @@ public sealed class WorkerHost
     {
         var writeLock = new SemaphoreSlim(1, 1);
         var activeRequests = new ConcurrentDictionary<string, CancellationTokenSource>();
+        var handlers = new ConcurrentDictionary<string, Task>();
         var scanCache = new ConcurrentDictionary<string, ScanResult>();
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -73,10 +74,11 @@ public sealed class WorkerHost
 
                 if (request.Command == WorkerCommands.Cancel)
                 {
-                    if (activeRequests.TryRemove(request.RequestId, out var existing))
+                    // Не удаляем CTS из activeRequests: это сделает обработчик
+                    // в своём finally, когда операция действительно завершится.
+                    if (activeRequests.TryGetValue(request.RequestId, out var existing))
                     {
                         try { existing.Cancel(); } catch { }
-                        existing.Dispose();
                     }
                     continue;
                 }
@@ -88,12 +90,23 @@ public sealed class WorkerHost
                     continue;
                 }
 
-                _ = Task.Run(() => HandleSafeAsync(
-                    request, stream, writeLock, scanCache, requestCts, activeRequests));
+                var handler = HandleSafeAsync(
+                    request, stream, writeLock, scanCache, requestCts, activeRequests);
+                handlers[request.RequestId] = handler;
+                if (handler.IsCompleted)
+                    handlers.TryRemove(request.RequestId, out _);
             }
         }
         finally
         {
+            linkedCts.Cancel();
+
+            try
+            {
+                await Task.WhenAll(handlers.Values).WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            catch { }
+
             foreach (var cts in activeRequests.Values)
             {
                 try { cts.Cancel(); } catch { }
@@ -189,11 +202,21 @@ public sealed class WorkerHost
             throw new InvalidOperationException("Не указан путь для сканирования.");
 
         var scanService = _services.GetRequiredService<ScanService>();
+        var driveService = _services.GetService<IDriveService>();
+        var drive = driveService?.GetDrive(request.Path);
         var filter = PayloadMapper.ToFilter(request.Filter);
+
+        if (driveService is not null)
+        {
+            foreach (var mountPoint in driveService.GetScanExcludedMountPoints(request.Path))
+                filter.ExcludedPaths.Add(mountPoint);
+        }
+
         var options = new ScanOptions
         {
-            MaxDegreeOfParallelism = request.MaxDegreeOfParallelism
-                ?? Environment.ProcessorCount * 2
+            MaxDegreeOfParallelism = request.MaxDegreeOfParallelism is > 0
+                ? request.MaxDegreeOfParallelism.Value
+                : ScanOptions.Default.MaxDegreeOfParallelism
         };
 
         await using var pump = new ProgressPump<ScanProgress>(
@@ -206,15 +229,20 @@ public sealed class WorkerHost
             });
 
         var result = await scanService.ScanAsync(request.Path, filter, options, pump.Progress, ct);
-        scanCache[request.RequestId] = result;
-        EvictOldScans(scanCache);
+
+        // Отмена могла прийти, пока сканирование уже завершалось.
+        ct.ThrowIfCancellationRequested();
+
+        scanCache.Clear();
+        if (result.Phase == ScanPhase.Completed)
+            scanCache[request.RequestId] = result;
 
         await pump.CompleteAsync();
         await SendAsync(stream, writeLock, new WorkerResponse
         {
             RequestId = request.RequestId,
             Type = WorkerMessageType.ScanCompleted,
-            ScanResult = PayloadMapper.ToPayload(result)
+            ScanResult = PayloadMapper.ToPayload(result, request.RequestId)
         }, ct);
     }
 
@@ -229,12 +257,15 @@ public sealed class WorkerHost
             throw new InvalidOperationException("Не указан ScanId.");
         if (!scanCache.TryGetValue(request.ScanId, out var scan))
             throw new InvalidOperationException($"Сканирование '{request.ScanId}' не найдено.");
+        if (scan.Phase != ScanPhase.Completed)
+            throw new InvalidOperationException("Сканирование не было завершено, поиск дубликатов невозможен.");
 
         var dedupService = _services.GetRequiredService<DuplicateFinderService>();
         var options = new DuplicateFinderOptions
         {
-            MaxDegreeOfParallelism = request.MaxDegreeOfParallelism
-                ?? Environment.ProcessorCount
+            MaxDegreeOfParallelism = request.MaxDegreeOfParallelism is > 0
+                ? request.MaxDegreeOfParallelism.Value
+                : Environment.ProcessorCount
         };
 
         await using var pump = new ProgressPump<ScanProgress>(
@@ -254,7 +285,7 @@ public sealed class WorkerHost
         {
             RequestId = request.RequestId,
             Type = WorkerMessageType.DedupCompleted,
-            Duplicates = groups.Select(PayloadMapper.ToPayload).ToList()
+             Duplicates = groups.Select(PayloadMapper.ToPayload).ToList()
         }, ct);
     }
 
@@ -268,13 +299,22 @@ public sealed class WorkerHost
             throw new InvalidOperationException("Не указан путь для индексации.");
 
         var indexingService = _services.GetRequiredService<IndexingService>();
+        var driveService = _services.GetService<IDriveService>();
         var filter = PayloadMapper.ToFilter(request.Filter);
+
+        if (driveService is not null)
+        {
+            foreach (var mountPoint in driveService.GetScanExcludedMountPoints(request.Path))
+                filter.ExcludedPaths.Add(mountPoint);
+        }
+
         var options = new IndexingOptions
         {
             BatchSize = request.BatchSize ?? 500,
             ExtractContentPreview = request.ExtractPreview ?? true,
-            MaxDegreeOfParallelism = request.MaxDegreeOfParallelism
-                ?? Environment.ProcessorCount
+            MaxDegreeOfParallelism = request.MaxDegreeOfParallelism is > 0
+                ? request.MaxDegreeOfParallelism.Value
+                : IndexingOptions.Default.MaxDegreeOfParallelism
         };
 
         await using var pump = new ProgressPump<ScanProgress>(
@@ -286,25 +326,15 @@ public sealed class WorkerHost
                 Progress = PayloadMapper.ToPayload(p)
             });
 
-        await indexingService.IndexAsync(request.Path, filter, options, pump.Progress, ct);
+        var result = await indexingService.IndexAsync(request.Path, filter, options, pump.Progress, ct);
 
         await pump.CompleteAsync();
         await SendAsync(stream, writeLock, new WorkerResponse
         {
             RequestId = request.RequestId,
             Type = WorkerMessageType.IndexCompleted,
-            IndexResult = new IndexResultPayload(0, 0)
+            IndexResult = new IndexResultPayload(result.ProcessedFiles, result.IndexedFiles)
         }, ct);
-    }
-
-    private static void EvictOldScans(ConcurrentDictionary<string, ScanResult> cache)
-    {
-        while (cache.Count > MaxCachedScans)
-        {
-            var firstKey = cache.Keys.FirstOrDefault();
-            if (firstKey is null) break;
-            cache.TryRemove(firstKey, out _);
-        }
     }
 
     private static Task SendAsync(
@@ -321,7 +351,9 @@ public sealed class WorkerHost
         await writeLock.WaitAsync(ct);
         try
         {
-            await Frames.WriteAsync(stream, response, ct);
+            // После получения writeLock кадр пишем без отмены: иначе можно
+            // оборвать запись посередине и сломать протокол для следующих запросов.
+            await Frames.WriteAsync(stream, response, CancellationToken.None);
         }
         catch (IOException) { }
         catch (ObjectDisposedException) { }

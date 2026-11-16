@@ -5,17 +5,37 @@
              x:Class="DiskAnalyzer.UI.Views.ScannerView"
              x:DataType="vm:ScannerViewModel">
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" Margin="16">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,3*,2*" Margin="16">
 
-    <TextBlock Grid.Row="0" Text="{Binding ScanRootPath}"
-               FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" />
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,8">
+      <TextBox Grid.Column="0"
+               Text="{Binding ScanRootPath, Mode=TwoWay}"
+               Watermark="Путь к папке, например /mnt/data или C:\Users\me" />
+      <Button Grid.Column="1" Content="Обзор…" Margin="8,0,0,0" Click="OnBrowseClick" />
+      <Button Grid.Column="2" Content="Сканировать" Margin="8,0,0,0"
+              Command="{Binding StartScanCommand}" />
+    </Grid>
 
-    <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,8">
-      <ProgressBar Value="{Binding ProgressPercent}" Maximum="100" Height="22" />
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16" Margin="0,0,0,8">
+      <CheckBox Content="Скрытые файлы и папки"
+                IsChecked="{Binding IncludeHidden, Mode=TwoWay}" />
+      <CheckBox Content="Системные файлы"
+                IsChecked="{Binding IncludeSystem, Mode=TwoWay}" />
+      <CheckBox Content="Бережный режим (HDD)"
+                IsChecked="{Binding HddMode, Mode=TwoWay}"
+                ToolTip.Tip="Меньше параллельных обращений к диску — медленнее, но не мешает системе." />
+    </StackPanel>
+
+    <StackPanel Grid.Row="2" Spacing="6" Margin="0,0,0,8">
+      <ProgressBar Value="{Binding ProgressPercent}" Maximum="100"
+                   IsIndeterminate="{Binding IsProgressIndeterminate}" Height="22" />
       <Grid ColumnDefinitions="*,Auto">
         <TextBlock Grid.Column="0" Text="{Binding CurrentPath}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Grid.Column="1" Text="{Binding Status}" Margin="12,0,0,0" />
+      </Grid>
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="{Binding ProcessedInfo}" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-          <TextBlock Text="{Binding ProcessedInfo}" />
           <Button Content="Отмена" Command="{Binding CancelCommand}" />
           <Button Content="Найти дубликаты" Command="{Binding FindDuplicatesCommand}" />
           <Button Content="Индексировать" Command="{Binding IndexResultCommand}" />
@@ -23,18 +43,17 @@
       </Grid>
     </StackPanel>
 
-    <TextBlock Grid.Row="2" Text="{Binding Summary}" FontWeight="SemiBold" Margin="0,4,0,8" />
-    <TextBlock Grid.Row="2" Text="{Binding ErrorMessage}" Foreground="Red" />
+    <StackPanel Grid.Row="3" Spacing="2" Margin="0,0,0,8">
+      <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" />
+      <TextBlock Text="{Binding ErrorMessage}" Foreground="Red" TextWrapping="Wrap" />
+    </StackPanel>
 
-    <Grid Grid.Row="3" RowDefinitions="*,Auto">
-      <tdg:TreeDataGrid Grid.Row="0" Source="{Binding TreeSource}" Height="400" />
-    </Grid>
+    <tdg:TreeDataGrid Grid.Row="4" Source="{Binding TreeSource}" />
 
-    <Grid Grid.Row="4" ColumnDefinitions="2*,*">
-      <TextBlock Grid.ColumnSpan="2" Text="Топ-50 крупнейших файлов:"
-                 FontWeight="SemiBold" Margin="0,12,0,4" VerticalAlignment="Top" />
-
-      <ListBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding TopFiles}" Margin="0,24,8,0">
+    <Grid Grid.Row="5" RowDefinitions="Auto,*" Margin="0,8,0,0">
+      <TextBlock Grid.Row="0" Text="Топ-50 крупнейших файлов:"
+                 FontWeight="SemiBold" Margin="0,0,0,4" />
+      <ListBox Grid.Row="1" ItemsSource="{Binding TopFiles}">
         <ListBox.ItemTemplate>
           <DataTemplate DataType="vm:FileEntryViewModel">
             <Grid ColumnDefinitions="*,120,140">

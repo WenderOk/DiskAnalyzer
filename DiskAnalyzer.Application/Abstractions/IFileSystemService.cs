@@ -2,9 +2,9 @@ namespace DiskAnalyzer.Application.Abstractions;
 
 public interface IFileSystemService
 {
-    IReadOnlyList<DirectoryInfoDto> EnumerateDirectories(string path);
-    IReadOnlyList<FileInfoDto> EnumerateFiles(string path);
+    /// <summary>Лениво перечисляет содержимое одного каталога без рекурсии.</summary>
+    IEnumerable<FileSystemEntryDto> EnumerateEntries(string path, CancellationToken ct = default);
+
     bool DirectoryExists(string path);
-    bool FileExists(string path);
     Stream OpenRead(string path);
 }

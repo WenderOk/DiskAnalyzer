@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 using DiskAnalyzer.Application.Abstractions;
 using DiskAnalyzer.Domain.Enums;
 using DiskAnalyzer.Domain.Exceptions;
@@ -8,6 +10,7 @@ namespace DiskAnalyzer.Application.Scanning;
 
 public sealed class ScanService
 {
+    private const int MaxErrors = 100;
     private readonly IFileSystemService _fileSystem;
 
     public ScanService(IFileSystemService fileSystem)
@@ -30,76 +33,29 @@ public sealed class ScanService
             throw new ScanFailedException($"Каталог '{normalizedRoot}' не существует.");
 
         var startedAt = DateTime.UtcNow;
-        var context = new ScanContext(options.MaxDegreeOfParallelism, options.ExpectedTotalBytes, progress);
+
+        // Сначала считаем итоговый размер (без аллокаций), чтобы прогресс-бар
+        // показывал реальный процент от 0 до 100.
+        var totalBytes = await CountAsync(
+            normalizedRoot, filter, options.MaxDegreeOfParallelism, progress, ct);
+
+        var context = new ScanContext(options.MaxDegreeOfParallelism, totalBytes, progress);
+        var files = new ConcurrentQueue<FileEntry>();
+        var errors = new ConcurrentQueue<string>();
+
         var root = new DirectoryNode
         {
             FullPath = normalizedRoot,
             Name = GetDirectoryName(normalizedRoot)
         };
 
-        var errors = new List<string>();
-        ScanPhase phase;
-        try
+        var work = Channel.CreateUnbounded<WorkItem>(new UnboundedChannelOptions
         {
-            await ScanDirectoryAsync(root, filter, context, ct);
-            phase = ScanPhase.Completed;
-        }
-        catch (OperationCanceledException)
-        {
-            phase = ScanPhase.Cancelled;
-        }
-        catch (Exception ex)
-        {
-            phase = ScanPhase.Failed;
-            errors.Add(ex.Message);
-        }
-
-        context.TryReport(true);
-
-        return new ScanResult
-        {
-            Root = root,
-            StartedAt = startedAt,
-            CompletedAt = DateTime.UtcNow,
-            Phase = phase,
-            Errors = errors
-        };
-    }
-
-    private async Task ScanDirectoryAsync(
-        DirectoryNode node,
-        ScanFilter filter,
-        ScanContext context,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-
-        long ownSize = 0;
-        foreach (var file in _fileSystem.EnumerateFiles(node.FullPath))
-        {
-            ct.ThrowIfCancellationRequested();
-            if (file.IsReparsePoint) continue;
-
-            var size = new FileSize(file.Size);
-            if (filter.IsExcludedFile(file.FullPath, file.Extension, size, file.IsHidden, file.IsSystem))
-                continue;
-
-            node.Files.Add(new FileEntry
-            {
-                FullPath = file.FullPath,
-                Name = file.Name,
-                Extension = file.Extension,
-                DirectoryPath = file.DirectoryPath,
-                Size = size,
-                LastModified = file.LastModified,
-                Created = file.Created
-            });
-            ownSize += file.Size;
-            context.ReportFile(file.FullPath, file.Size);
-        }
-
-        node.TotalSize = new FileSize(ownSize);
-        node.FileCount = node.Files.Count;
+            SingleReader = false,
+            SingleWriter = false
+        });
+        var state = new QueueState { Pending = 1 };
+        work.Writer.TryWrite(new WorkItem(root, 0));
 
         var parallelOptions = new ParallelOptions
         {
@@ -107,33 +63,260 @@ public sealed class ScanService
             CancellationToken = ct
         };
 
-        await Parallel.ForEachAsync(
-            _fileSystem.EnumerateDirectories(node.FullPath),
-            parallelOptions,
-            async (directory, token) =>
+        context.SetPhase(ScanPhase.Enumerating);
+        context.TryReport(true);
+
+        ScanPhase phase;
+        try
+        {
+            await Parallel.ForEachAsync(
+                work.Reader.ReadAllAsync(ct),
+                parallelOptions,
+                (item, token) =>
+                {
+                    ProcessDirectory(item.Node, item.Depth, filter, context, work.Writer, state, files, errors, token);
+                    return ValueTask.CompletedTask;
+                });
+
+            Aggregate(root);
+            phase = ScanPhase.Completed;
+        }
+        catch (OperationCanceledException)
+        {
+            phase = ScanPhase.Cancelled;
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Aggregate(root);
+            phase = ScanPhase.Failed;
+            errors.Enqueue(ex.Message);
+        }
+        finally
+        {
+            work.Writer.TryComplete();
+        }
+
+        context.SetPhase(phase);
+        context.TryReport(true);
+
+        var allFiles = files.ToArray();
+        return new ScanResult
+        {
+            Root = root,
+            Files = allFiles,
+            TopFiles = TakeTopLargest(allFiles, options.TopFilesCount),
+            StartedAt = startedAt,
+            CompletedAt = DateTime.UtcNow,
+            Phase = phase,
+            Errors = errors.Take(MaxErrors).ToList()
+        };
+    }
+
+    private void ProcessDirectory(
+        DirectoryNode node,
+        int depth,
+        ScanFilter filter,
+        ScanContext context,
+        ChannelWriter<WorkItem> writer,
+        QueueState state,
+        ConcurrentQueue<FileEntry> files,
+        ConcurrentQueue<string> errors,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        long ownSize = 0;
+        long ownFiles = 0;
+
+        try
+        {
+            foreach (var entry in _fileSystem.EnumerateEntries(node.FullPath, ct))
             {
-                if (directory.IsReparsePoint) return;
-                if (filter.IsExcludedDirectory(
-                        directory.FullPath, directory.Name, directory.IsHidden, directory.IsSystem))
-                    return;
+                ct.ThrowIfCancellationRequested();
+                if (entry.IsReparsePoint) continue;
 
-                var child = new DirectoryNode
+                if (entry.IsDirectory)
                 {
-                    FullPath = directory.FullPath,
-                    Name = directory.Name,
-                    Parent = node
-                };
+                    if (depth >= filter.MaxDepth) continue;
+                    if (filter.IsExcludedDirectory(entry.FullPath, entry.Name, entry.IsHidden, entry.IsSystem))
+                        continue;
 
-                await ScanDirectoryAsync(child, filter, context, token);
-
-                lock (node)
-                {
+                    var child = new DirectoryNode
+                    {
+                        FullPath = entry.FullPath,
+                        Name = entry.Name,
+                        Parent = node
+                    };
                     node.Children.Add(child);
-                    node.TotalSize += child.TotalSize;
-                    node.FileCount += child.FileCount;
-                    node.FolderCount += child.FolderCount + 1;
+
+                    Interlocked.Increment(ref state.Pending);
+                    writer.TryWrite(new WorkItem(child, depth + 1));
                 }
+                else
+                {
+                    var size = new FileSize(entry.Size);
+                    if (filter.IsExcludedFile(entry.FullPath, entry.Extension, size, entry.IsHidden, entry.IsSystem))
+                        continue;
+
+                    files.Enqueue(new FileEntry
+                    {
+                        FullPath = entry.FullPath,
+                        Size = size,
+                        LastModified = entry.LastModified,
+                        Created = entry.Created
+                    });
+
+                    ownFiles++;
+                    ownSize += entry.Size;
+                    context.ReportFile(entry.FullPath, entry.Size);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (errors.Count < MaxErrors)
+                errors.Enqueue($"{node.FullPath}: {ex.Message}");
+        }
+
+        node.OwnSize = new FileSize(ownSize);
+        node.OwnFileCount = ownFiles;
+        context.ReportDirectory(node.FullPath);
+
+        if (Interlocked.Decrement(ref state.Pending) == 0)
+            writer.TryComplete();
+    }
+
+    private async Task<long> CountAsync(
+        string rootPath,
+        ScanFilter filter,
+        int maxDegreeOfParallelism,
+        IProgress<ScanProgress>? progress,
+        CancellationToken ct)
+    {
+        long bytes = 0;
+        var work = Channel.CreateUnbounded<PathItem>(new UnboundedChannelOptions
+        {
+            SingleReader = false,
+            SingleWriter = false
+        });
+        var state = new QueueState { Pending = 1 };
+        work.Writer.TryWrite(new PathItem(rootPath, 0));
+
+        var counting = new ScanContext(maxDegreeOfParallelism, 0, progress);
+        counting.TryReport(true);
+
+        var options = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = maxDegreeOfParallelism,
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(
+            work.Reader.ReadAllAsync(ct),
+            options,
+            (item, token) =>
+            {
+                CountDirectory(item, filter, work.Writer, state, ref bytes, counting, token);
+                return ValueTask.CompletedTask;
             });
+
+        return Interlocked.Read(ref bytes);
+    }
+
+    private void CountDirectory(
+        PathItem item,
+        ScanFilter filter,
+        ChannelWriter<PathItem> writer,
+        QueueState state,
+        ref long bytes,
+        ScanContext counting,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        try
+        {
+            foreach (var entry in _fileSystem.EnumerateEntries(item.Path, ct))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (entry.IsReparsePoint) continue;
+
+                if (entry.IsDirectory)
+                {
+                    if (item.Depth >= filter.MaxDepth) continue;
+                    if (filter.IsExcludedDirectory(entry.FullPath, entry.Name, entry.IsHidden, entry.IsSystem))
+                        continue;
+
+                    Interlocked.Increment(ref state.Pending);
+                    writer.TryWrite(new PathItem(entry.FullPath, item.Depth + 1));
+                }
+                else
+                {
+                    var size = new FileSize(entry.Size);
+                    if (filter.IsExcludedFile(entry.FullPath, entry.Extension, size, entry.IsHidden, entry.IsSystem))
+                        continue;
+
+                    Interlocked.Add(ref bytes, entry.Size);
+                    counting.ReportFile(entry.FullPath, entry.Size);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Недоступный каталог пропускаем; основной проход отразит это в Errors.
+        }
+
+        counting.ReportDirectory(item.Path);
+
+        if (Interlocked.Decrement(ref state.Pending) == 0)
+            writer.TryComplete();
+    }
+
+    private static void Aggregate(DirectoryNode node)
+    {
+        long size = node.OwnSize.Bytes;
+        long files = node.OwnFileCount;
+        long folders = 0;
+
+        foreach (var child in node.Children)
+        {
+            Aggregate(child);
+            size += child.TotalSize.Bytes;
+            files += child.FileCount;
+            folders += child.FolderCount + 1;
+        }
+
+        node.TotalSize = new FileSize(size);
+        node.FileCount = files;
+        node.FolderCount = folders;
+    }
+
+    private static IReadOnlyList<FileEntry> TakeTopLargest(IReadOnlyList<FileEntry> files, int count)
+    {
+        if (count <= 0 || files.Count == 0)
+            return Array.Empty<FileEntry>();
+
+        var heap = new PriorityQueue<FileEntry, long>();
+        foreach (var file in files)
+        {
+            heap.Enqueue(file, file.Size.Bytes);
+            if (heap.Count > count)
+                heap.Dequeue();
+        }
+
+        return heap.UnorderedItems
+            .Select(x => x.Element)
+            .OrderByDescending(f => f.Size.Bytes)
+            .ToList();
     }
 
     private static string NormalizePath(string path)
@@ -148,5 +331,13 @@ public sealed class ScanService
         var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var name = Path.GetFileName(trimmed);
         return string.IsNullOrEmpty(name) ? path : name;
+    }
+
+    private readonly record struct WorkItem(DirectoryNode Node, int Depth);
+    private readonly record struct PathItem(string Path, int Depth);
+
+    private sealed class QueueState
+    {
+        public int Pending;
     }
 }

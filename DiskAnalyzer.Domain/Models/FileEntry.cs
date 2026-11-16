@@ -2,17 +2,22 @@ using DiskAnalyzer.Domain.Enums;
 
 namespace DiskAnalyzer.Domain.Models;
 
+/// <summary>
+/// Описание файла. Хранит только полный путь: имя, расширение и каталог
+/// вычисляются из него, чтобы не держать в памяти несколько копий строк.
+/// </summary>
 public sealed class FileEntry
 {
     public required string FullPath { get; init; }
-    public required string Name { get; init; }
-    public required string Extension { get; init; }
-    public required string DirectoryPath { get; init; }
     public required FileSize Size { get; init; }
     public required DateTime LastModified { get; init; }
     public required DateTime Created { get; init; }
 
     public string? ContentHash { get; set; }
+
+    public string Name => Path.GetFileName(FullPath);
+    public string Extension => Path.GetExtension(FullPath);
+    public string DirectoryPath => Path.GetDirectoryName(FullPath) ?? string.Empty;
 
     public FileCategory Category => ExtensionToCategory(Extension);
 

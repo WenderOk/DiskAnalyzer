@@ -9,12 +9,15 @@
     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
       <Button Content="Обновить" Command="{Binding RefreshCommand}" />
       <Button Content="Сканировать" Command="{Binding ScanCommand}" />
+      <CheckBox Content="Показывать системные и виртуальные"
+                IsChecked="{Binding ShowSystemDrives, Mode=TwoWay}"
+                VerticalAlignment="Center" />
     </StackPanel>
 
     <ListBox ItemsSource="{Binding Drives}" SelectedItem="{Binding SelectedDrive, Mode=TwoWay}">
       <ListBox.ItemTemplate>
         <DataTemplate DataType="models:DriveInfoModel">
-          <Grid ColumnDefinitions="200,120,120,80,*" Margin="4,8">
+          <Grid ColumnDefinitions="2*,120,120,80,*" Margin="4,8">
             <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontWeight="SemiBold" />
             <TextBlock Grid.Column="1" Text="{Binding FileSystem}" />
             <TextBlock Grid.Column="2" Text="{Binding Kind}" />
