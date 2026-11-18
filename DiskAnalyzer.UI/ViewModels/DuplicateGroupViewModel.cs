@@ -14,6 +14,9 @@ public sealed class DuplicateGroupViewModel
         WastedBytes = group.WastedSpace.Bytes;
     }
 
+    public string Name => Files.FirstOrDefault()?.Name ?? string.Empty;
+    public string Details => $"{Count} копий · по {DisplaySize} · можно освободить {DisplayWasted}";
+
     public string ContentHash { get; }
     public FileSize FileSize { get; }
     public ObservableCollection<FileEntryViewModel> Files { get; }

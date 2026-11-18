@@ -6,7 +6,7 @@ namespace DiskAnalyzer.Application.Scanning;
 internal sealed class ScanContext
 {
     private readonly IProgress<ScanProgress>? _progress;
-    private readonly long _expectedTotalBytes;
+    private readonly long _expectedTotalFiles;
     private readonly int _reportIntervalMs;
 
     private long _files;
@@ -18,11 +18,11 @@ internal sealed class ScanContext
 
     public int MaxDegreeOfParallelism { get; }
 
-    public ScanContext(int maxDegreeOfParallelism, long expectedTotalBytes,
+    public ScanContext(int maxDegreeOfParallelism, long expectedTotalFiles,
         IProgress<ScanProgress>? progress, int reportIntervalMs = 100)
     {
         MaxDegreeOfParallelism = Math.Max(1, maxDegreeOfParallelism);
-        _expectedTotalBytes = expectedTotalBytes;
+        _expectedTotalFiles = expectedTotalFiles;
         _progress = progress;
         _reportIntervalMs = reportIntervalMs;
     }
@@ -42,7 +42,7 @@ internal sealed class ScanContext
         TryReport(false);
     }
 
-     public void SetPhase(ScanPhase phase) => Volatile.Write(ref _phase, (int)phase);
+    public void SetPhase(ScanPhase phase) => Volatile.Write(ref _phase, (int)phase);
 
     public void TryReport(bool force)
     {
@@ -54,8 +54,8 @@ internal sealed class ScanContext
         if (Interlocked.CompareExchange(ref _lastReportTick, now, last) != last) return;
 
         var processedBytes = Interlocked.Read(ref _bytes);
-        var percent = _expectedTotalBytes > 0
-            ? Math.Min(100.0, (double)processedBytes / _expectedTotalBytes * 100)
+        var percent = _expectedTotalFiles > 0
+            ? Math.Min(99.9, (double)Interlocked.Read(ref _files) / _expectedTotalFiles * 100)
             : 0;
 
         _progress.Report(new ScanProgress
@@ -65,7 +65,7 @@ internal sealed class ScanContext
             ProcessedFiles = Interlocked.Read(ref _files),
             ProcessedFolders = Interlocked.Read(ref _folders),
             ProcessedSize = new FileSize(processedBytes),
-            Percent = percent,
+            Percent = (ScanPhase)Volatile.Read(ref _phase) == ScanPhase.Completed ? 100 : percent,
         });
     }
 }

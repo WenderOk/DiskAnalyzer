@@ -7,7 +7,7 @@ public sealed class WorkerResponse
 
     public ScanProgressPayload? Progress { get; init; }
     public ScanResultPayload? ScanResult { get; init; }
-    public List<DuplicateGroupPayload>? Duplicates { get; init; }
+    public DuplicateResultPayload? DuplicateResult { get; init; }
     public IndexResultPayload? IndexResult { get; init; }
     public string? Error { get; init; }
 }

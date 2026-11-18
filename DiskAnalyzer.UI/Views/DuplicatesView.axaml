@@ -3,37 +3,55 @@
              xmlns:vm="using:DiskAnalyzer.UI.ViewModels"
              x:Class="DiskAnalyzer.UI.Views.DuplicatesView"
              x:DataType="vm:DuplicatesViewModel">
-
-  <DockPanel Margin="16">
-    <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+  <UserControl.Styles>
+    <Style Selector="ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+  </UserControl.Styles>
+  <Grid Margin="16" RowDefinitions="Auto,*">
+    <StackPanel Spacing="6" Margin="0,0,0,12">
       <Grid ColumnDefinitions="*,Auto">
-        <ProgressBar Grid.Column="0" Value="{Binding ProgressPercent}" Maximum="100" Height="22" />
+        <ProgressBar Value="{Binding ProgressPercent}" Maximum="100" ShowProgressText="True" Height="22" />
         <Button Grid.Column="1" Content="Отмена" Command="{Binding CancelCommand}" Margin="8,0,0,0" />
       </Grid>
       <TextBlock Text="{Binding Status}" />
-      <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" />
-      <TextBlock Text="{Binding ErrorMessage}" Foreground="Red" />
+      <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding SkippedUnreadableFiles, StringFormat='Недоступных файлов пропущено: {0:N0}'}" />
+      <TextBlock Text="{Binding ErrorMessage}" Foreground="Red" TextWrapping="Wrap" />
     </StackPanel>
 
-    <ListBox ItemsSource="{Binding Groups}">
-      <ListBox.ItemTemplate>
-        <DataTemplate DataType="vm:DuplicateGroupViewModel">
-          <Expander Header="{Binding DisplaySize, StringFormat='Размер: {0}'}">
-            <StackPanel Spacing="4">
-              <TextBlock Text="{Binding Count, StringFormat='Копий: {0}'}" />
-              <TextBlock Text="{Binding DisplayWasted, StringFormat='Можно освободить: {0}'}" />
-              <ItemsControl ItemsSource="{Binding Files}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate DataType="vm:FileEntryViewModel">
-                    <TextBlock Text="{Binding FullPath}" />
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </StackPanel>
-          </Expander>
-        </DataTemplate>
-      </ListBox.ItemTemplate>
-    </ListBox>
-  </DockPanel>
-
+    <Grid Grid.Row="1" ColumnDefinitions="2*,8,3*">
+      <Grid RowDefinitions="Auto,*">
+        <TextBlock Text="Группы дубликатов · сначала больше занимаемого места"
+                   TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <ListBox Grid.Row="1" ItemsSource="{Binding Groups}"
+                 SelectedItem="{Binding SelectedGroup, Mode=TwoWay}">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:DuplicateGroupViewModel">
+              <StackPanel Spacing="6" Margin="4,8">
+                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                <TextBlock Text="{Binding Details}" TextWrapping="Wrap" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Grid>
+      <GridSplitter Grid.Column="1" ResizeDirection="Columns" HorizontalAlignment="Stretch" />
+      <Grid Grid.Column="2" RowDefinitions="Auto,*" Margin="12,0,0,0">
+        <TextBlock Text="Файлы выбранной группы" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <ListBox Grid.Row="1" ItemsSource="{Binding SelectedGroup.Files}">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:FileEntryViewModel">
+              <StackPanel Spacing="6" Margin="4,8">
+                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <SelectableTextBlock Text="{Binding FullPath}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding DisplayDate, StringFormat='Изменён: {0}'}" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Grid>
+    </Grid>
+  </Grid>
 </UserControl>

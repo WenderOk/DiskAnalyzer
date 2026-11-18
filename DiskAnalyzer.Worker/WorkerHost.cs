@@ -277,7 +277,7 @@ public sealed class WorkerHost
                 Progress = PayloadMapper.ToPayload(p)
             });
 
-        var groups = await dedupService.FindDuplicatesAsync(
+        var result = await dedupService.FindDuplicatesAsync(
             scan.EnumerateAllFiles(), options, pump.Progress, ct);
 
         await pump.CompleteAsync();
@@ -285,7 +285,8 @@ public sealed class WorkerHost
         {
             RequestId = request.RequestId,
             Type = WorkerMessageType.DedupCompleted,
-             Duplicates = groups.Select(PayloadMapper.ToPayload).ToList()
+            DuplicateResult = new DuplicateResultPayload(
+                result.Groups.Select(PayloadMapper.ToPayload).ToList(), result.SkippedUnreadableFiles)
         }, ct);
     }
 
@@ -363,6 +364,11 @@ public sealed class WorkerHost
         }
     }
 
+    private sealed class ChannelProgress<T>(ChannelWriter<T> writer) : IProgress<T>
+    {
+        public void Report(T value) => writer.TryWrite(value);
+    }
+
     private sealed class ProgressPump<T> : IAsyncDisposable
     {
         private readonly Channel<T> _channel;
@@ -383,7 +389,7 @@ public sealed class WorkerHost
                 SingleWriter = false
             });
 
-            _progress = new Progress<T>(value => _channel.Writer.TryWrite(value));
+            _progress = new ChannelProgress<T>(_channel.Writer);
 
             _pumpTask = Task.Run(async () =>
             {

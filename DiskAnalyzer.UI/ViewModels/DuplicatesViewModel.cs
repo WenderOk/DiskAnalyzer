@@ -18,6 +18,8 @@ public sealed partial class DuplicatesViewModel : ViewModelBase
     }
 
     [ObservableProperty] private bool _isBusy;
+    [ObservableProperty] private long _skippedUnreadableFiles;
+    [ObservableProperty] private DuplicateGroupViewModel? _selectedGroup;
     [ObservableProperty] private double _progressPercent;
     [ObservableProperty] private string _status = string.Empty;
     [ObservableProperty] private string? _errorMessage;
@@ -34,7 +36,10 @@ public sealed partial class DuplicatesViewModel : ViewModelBase
     {
         if (IsBusy) return;
 
+        SelectedGroup = null;
         Groups.Clear();
+        SkippedUnreadableFiles = 0;
+        Status = "Подготовка…";
         ErrorMessage = null;
         Summary = string.Empty;
         ProgressPercent = 0;
@@ -52,12 +57,13 @@ public sealed partial class DuplicatesViewModel : ViewModelBase
             {
                 ProgressPercent = p.Percent;
                 Status = p.Message ?? string.Empty;
+                SkippedUnreadableFiles = p.SkippedUnreadableFiles;
             });
 
-            var payloads = await _worker.FindDuplicatesAsync(scanId, progress, ct: _cts.Token);
+            var result = await _worker.FindDuplicatesAsync(scanId, progress, ct: _cts.Token);
 
             long totalWasted = 0;
-            foreach (var payload in payloads)
+            foreach (var payload in result.Groups)
             {
                 var domain = WorkerPayloadMapper.ToDomain(payload);
                 var vm = new DuplicateGroupViewModel(domain);
@@ -65,14 +71,20 @@ public sealed partial class DuplicatesViewModel : ViewModelBase
                 Groups.Add(vm);
             }
 
+            SkippedUnreadableFiles = result.SkippedUnreadableFiles;
+            SelectedGroup = Groups.FirstOrDefault();
+            ProgressPercent = 100;
+            Status = "Поиск завершён";
             Summary = $"Найдено групп: {Groups.Count} · можно освободить: {FileSize.FromBytes(totalWasted).ToHumanReadable()}";
         }
         catch (OperationCanceledException)
         {
+            Status = "Отменено";
             Summary = "Поиск отменён.";
         }
         catch (Exception ex)
         {
+            Status = "Ошибка";
             ErrorMessage = ex.Message;
         }
         finally

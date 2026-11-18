@@ -5,123 +5,98 @@ using DiskAnalyzer.Domain.Models;
 
 namespace DiskAnalyzer.Application.Duplicates;
 
-public sealed class DuplicateFinderService
+public sealed class DuplicateFinderService(IHashService hashService)
 {
-    private readonly IHashService _hashService;
-
-    public DuplicateFinderService(IHashService hashService)
-    {
-        _hashService = hashService;
-    }
-
-    public async Task<IReadOnlyList<DuplicateGroup>> FindDuplicatesAsync(
+    public async Task<DuplicateSearchResult> FindDuplicatesAsync(
         IEnumerable<FileEntry> files,
         DuplicateFinderOptions? options = null,
         IProgress<ScanProgress>? progress = null,
         CancellationToken ct = default)
     {
         options ??= DuplicateFinderOptions.Default;
-
+        var skipped = 0L;
+        // Кеш действует только в рамках текущего поиска: файлы могли измениться после сканирования.
+        var fullHashes = new ConcurrentDictionary<string, string>();
         var candidates = files
             .Where(f => f.Size >= options.MinFileSize)
             .GroupBy(f => f.Size.Bytes)
             .Where(g => g.Count() > 1)
+            .Select(g => g.ToList())
             .ToList();
 
-        if (candidates.Count == 0)
-            return Array.Empty<DuplicateGroup>();
-
-        var parallelOptions = new ParallelOptions
+        var partial = await HashAsync(candidates, partial: true);
+        var full = await HashAsync(partial, partial: false);
+        ct.ThrowIfCancellationRequested();
+        var groups = full.Select(g => new DuplicateGroup
         {
-            MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
-            CancellationToken = ct
-        };
+            ContentHash = fullHashes[g[0].FullPath],
+            FileSize = g[0].Size,
+            Files = g.OrderBy(f => f.FullPath, StringComparer.Ordinal).ToList()
+        }).OrderByDescending(g => g.WastedSpace.Bytes).ToList();
 
-        var totalPhase1 = candidates.Sum(g => g.Count());
-        var processedPhase1 = 0;
-        var byPartialHash = new ConcurrentDictionary<string, List<FileEntry>>();
-
-        Report(progress, "Частичное хеширование", 0, totalPhase1);
-
-        await Parallel.ForEachAsync(candidates, parallelOptions, async (group, token) =>
-        {
-            foreach (var file in group)
-            {
-                token.ThrowIfCancellationRequested();
-
-                string hash;
-                if (file.Size.Bytes <= options.PartialHashSize)
-                {
-                    hash = await _hashService.ComputeFileHashAsync(file.FullPath, token);
-                    file.ContentHash = hash;
-                }
-                else
-                {
-                    hash = await _hashService.ComputePartialFileHashAsync(
-                        file.FullPath, options.PartialHashSize, token);
-                }
-
-                var key = $"{file.Size.Bytes}:{hash}";
-                var list = byPartialHash.GetOrAdd(key, _ => new List<FileEntry>());
-                lock (list) { list.Add(file); }
-
-                var done = Interlocked.Increment(ref processedPhase1);
-                if (done % 64 == 0)
-                    Report(progress, "Частичное хеширование", done, totalPhase1);
-            }
-        });
-
-        var stillCandidates = byPartialHash.Values.Where(l => l.Count > 1).ToList();
-        if (stillCandidates.Count == 0)
-             return Array.Empty<DuplicateGroup>();
-
-        var totalPhase2 = stillCandidates.Sum(l => l.Count);
-        var processedPhase2 = 0;
-        var byFullHash = new ConcurrentDictionary<string, List<FileEntry>>();
-
-        Report(progress, "Полное хеширование", 0, totalPhase2);
-
-        await Parallel.ForEachAsync(stillCandidates, parallelOptions, async (group, token) =>
-        {
-            foreach (var file in group)
-            {
-                token.ThrowIfCancellationRequested();
-
-                var fullHash = file.ContentHash
-                    ?? await _hashService.ComputeFileHashAsync(file.FullPath, token);
-
-                var list = byFullHash.GetOrAdd(fullHash, _ => new List<FileEntry>());
-                lock (list) { list.Add(file); }
-
-                var done = Interlocked.Increment(ref processedPhase2);
-                if (done % 64 == 0)
-                    Report(progress, "Полное хеширование", done, totalPhase2);
-            }
-        });
-
-        var results = new List<DuplicateGroup>();
-        foreach (var (hash, group) in byFullHash)
-        {
-            if (group.Count < 2) continue;
-            results.Add(new DuplicateGroup
-            {
-                ContentHash = hash,
-                FileSize = group[0].Size,
-                Files = group
-            });
-        }
-
-         return results;
-    }
-
-    private static void Report(IProgress<ScanProgress>? progress, string message, int done, int total)
-    {
         progress?.Report(new ScanProgress
         {
-            Phase = ScanPhase.Hashing,
-            Message = message,
-            ProcessedFiles = done,
-            Percent = total > 0 ? (double)done / total * 100 : 0
+            Phase = ScanPhase.Completed,
+            Percent = 100,
+            SkippedUnreadableFiles = skipped,
+            Message = "Поиск завершён"
         });
+        return new DuplicateSearchResult(groups, skipped);
+
+        async Task<List<List<FileEntry>>> HashAsync(List<List<FileEntry>> input, bool partial)
+        {
+            var total = input.Sum(g => g.Count);
+            var processed = 0;
+            var buckets = new ConcurrentDictionary<string, List<FileEntry>>();
+            var message = partial ? "Частичное хеширование" : "Полное хеширование";
+            Report();
+            await Parallel.ForEachAsync(input, new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, options.MaxDegreeOfParallelism),
+                CancellationToken = ct
+            }, async (group, token) =>
+            {
+                foreach (var file in group)
+                {
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        string hash;
+                        if (!partial && fullHashes.TryGetValue(file.FullPath, out var cached))
+                            hash = cached;
+                        else if (!partial || file.Size.Bytes <= options.PartialHashSize)
+                        {
+                            hash = await hashService.ComputeFileHashAsync(file.FullPath, token);
+                            fullHashes[file.FullPath] = hash;
+                        }
+                        else
+                            hash = await hashService.ComputePartialFileHashAsync(
+                                file.FullPath, options.PartialHashSize, token);
+
+                        var bucket = buckets.GetOrAdd($"{file.Size.Bytes}:{hash}", _ => new());
+                        lock (bucket) bucket.Add(file);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        Interlocked.Increment(ref skipped);
+                    }
+                    // Ошибка чтения тоже считается обработанным файлом. Отмена не перехватывается.
+                    if (Interlocked.Increment(ref processed) % 64 == 0) Report();
+                }
+            });
+            Report();
+            return buckets.Values.Where(g => g.Count > 1).ToList();
+
+            void Report() => progress?.Report(new ScanProgress
+            {
+                Phase = ScanPhase.Hashing,
+                Message = message,
+                ProcessedFiles = Volatile.Read(ref processed),
+                SkippedUnreadableFiles = Interlocked.Read(ref skipped),
+                Percent = (partial ? 0 : 50) + (total > 0 ? 50.0 * Volatile.Read(ref processed) / total : 50)
+            });
+        }
     }
 }
+
+public sealed record DuplicateSearchResult(IReadOnlyList<DuplicateGroup> Groups, long SkippedUnreadableFiles);

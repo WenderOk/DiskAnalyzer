@@ -34,12 +34,11 @@ public sealed class ScanService
 
         var startedAt = DateTime.UtcNow;
 
-        // Сначала считаем итоговый размер (без аллокаций), чтобы прогресс-бар
-        // показывал реальный процент от 0 до 100.
-        var totalBytes = await CountAsync(
+        // Предварительно считаем файлы, включая пустые, для определения процента.
+        var totalFiles = await CountAsync(
             normalizedRoot, filter, options.MaxDegreeOfParallelism, progress, ct);
 
-        var context = new ScanContext(options.MaxDegreeOfParallelism, totalBytes, progress);
+        var context = new ScanContext(options.MaxDegreeOfParallelism, totalFiles, progress);
         var files = new ConcurrentQueue<FileEntry>();
         var errors = new ConcurrentQueue<string>();
 
@@ -198,7 +197,7 @@ public sealed class ScanService
         IProgress<ScanProgress>? progress,
         CancellationToken ct)
     {
-        long bytes = 0;
+        long fileCount = 0;
         var work = Channel.CreateUnbounded<PathItem>(new UnboundedChannelOptions
         {
             SingleReader = false,
@@ -208,6 +207,7 @@ public sealed class ScanService
         work.Writer.TryWrite(new PathItem(rootPath, 0));
 
         var counting = new ScanContext(maxDegreeOfParallelism, 0, progress);
+        counting.SetPhase(ScanPhase.Counting);
         counting.TryReport(true);
 
         var options = new ParallelOptions
@@ -221,11 +221,11 @@ public sealed class ScanService
             options,
             (item, token) =>
             {
-                CountDirectory(item, filter, work.Writer, state, ref bytes, counting, token);
+                CountDirectory(item, filter, work.Writer, state, ref fileCount, counting, token);
                 return ValueTask.CompletedTask;
             });
 
-        return Interlocked.Read(ref bytes);
+        return Interlocked.Read(ref fileCount);
     }
 
     private void CountDirectory(
@@ -233,7 +233,7 @@ public sealed class ScanService
         ScanFilter filter,
         ChannelWriter<PathItem> writer,
         QueueState state,
-        ref long bytes,
+        ref long fileCount,
         ScanContext counting,
         CancellationToken ct)
     {
@@ -261,7 +261,7 @@ public sealed class ScanService
                     if (filter.IsExcludedFile(entry.FullPath, entry.Extension, size, entry.IsHidden, entry.IsSystem))
                         continue;
 
-                    Interlocked.Add(ref bytes, entry.Size);
+                    Interlocked.Increment(ref fileCount);
                     counting.ReportFile(entry.FullPath, entry.Size);
                 }
             }

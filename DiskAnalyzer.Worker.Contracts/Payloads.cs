@@ -16,7 +16,8 @@ public sealed record ScanProgressPayload(
     long ProcessedFolders,
     long ProcessedSizeBytes,
     double Percent,
-    string? Message);
+    string? Message,
+    long SkippedUnreadableFiles = 0);
 
 public sealed record FileEntryPayload(
     string FullPath,

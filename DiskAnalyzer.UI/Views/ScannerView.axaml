@@ -28,7 +28,7 @@
 
     <StackPanel Grid.Row="2" Spacing="6" Margin="0,0,0,8">
       <ProgressBar Value="{Binding ProgressPercent}" Maximum="100"
-                   IsIndeterminate="{Binding IsProgressIndeterminate}" Height="22" />
+                   IsIndeterminate="{Binding IsProgressIndeterminate}" ShowProgressText="True" Height="22" />
       <Grid ColumnDefinitions="*,Auto">
         <TextBlock Grid.Column="0" Text="{Binding CurrentPath}" TextTrimming="CharacterEllipsis" />
         <TextBlock Grid.Column="1" Text="{Binding Status}" Margin="12,0,0,0" />

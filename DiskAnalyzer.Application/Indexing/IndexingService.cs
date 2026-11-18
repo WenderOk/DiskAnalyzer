@@ -83,7 +83,7 @@ public sealed class IndexingService
                 await writer.WriteAsync(file, token);
 
                 var done = Interlocked.Increment(ref processed);
-                if (done % 100 == 0)
+                if (done == 1 || done % 100 == 0)
                 {
                     progress?.Report(new ScanProgress
                     {
@@ -99,6 +99,11 @@ public sealed class IndexingService
             writer.Complete();
         }
 
+        progress?.Report(new ScanProgress
+        {
+            Phase = ScanPhase.Finalizing,
+            ProcessedFiles = processed
+        });
         return processed;
     }
 

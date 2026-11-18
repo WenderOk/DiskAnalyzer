@@ -9,6 +9,7 @@ public sealed class ScanProgress
     public long ProcessedFiles { get; init; }
     public long ProcessedFolders { get; init; }
     public FileSize ProcessedSize { get; init; }
+    public long SkippedUnreadableFiles { get; init; }
     public double Percent { get; init; }
     public string? Message { get; init; }
 

@@ -36,6 +36,8 @@ public sealed partial class IndexingViewModel : ViewModelBase
         ErrorMessage = null;
         Summary = string.Empty;
         ProgressPercent = 0;
+        CurrentPath = string.Empty;
+        ProcessedInfo = "0 файлов";
 
         IsBusy = true;
         _cts = new CancellationTokenSource();
@@ -55,6 +57,7 @@ public sealed partial class IndexingViewModel : ViewModelBase
 
             var result = await _worker.IndexAsync(path, progress, ct: _cts.Token);
             ProgressPercent = 100;
+            ProcessedInfo = $"{result.ProcessedFiles:N0} файлов";
             Summary = $"Индексация завершена: {result.ProcessedFiles:N0} обработано, " +
                       $"{result.IndexedFiles:N0} добавлено в индекс.";
         }

@@ -34,7 +34,8 @@ internal static class PayloadMapper
         progress.ProcessedFolders,
         progress.ProcessedSize.Bytes,
         progress.Percent,
-        progress.Message);
+        progress.Message,
+        progress.SkippedUnreadableFiles);
 
     public static ScanResultPayload ToPayload(ScanResult result, string scanId) => new(
         scanId,

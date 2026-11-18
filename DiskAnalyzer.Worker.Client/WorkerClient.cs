@@ -182,7 +182,7 @@ public sealed class WorkerClient : IAsyncDisposable
             r => r.ScanResult ?? throw new WorkerException("Пустой ScanResult."));
     }
 
-    public WorkerOperation<List<DuplicateGroupPayload>> FindDuplicates(
+    public WorkerOperation<DuplicateResultPayload> FindDuplicates(
         string scanId,
         int? maxDegreeOfParallelism = null)
     {
@@ -195,7 +195,7 @@ public sealed class WorkerClient : IAsyncDisposable
                 ScanId = scanId,
                 MaxDegreeOfParallelism = maxDegreeOfParallelism
             },
-            r => r.Duplicates ?? new List<DuplicateGroupPayload>());
+            r => r.DuplicateResult ?? throw new WorkerException("Пустой DuplicateResult."));
     }
 
     public WorkerOperation<IndexResultPayload> Index(
@@ -231,7 +231,7 @@ public sealed class WorkerClient : IAsyncDisposable
         return await WaitWithProgressAsync(op, progress, ct);
     }
 
-    public async Task<List<DuplicateGroupPayload>> FindDuplicatesAsync(
+    public async Task<DuplicateResultPayload> FindDuplicatesAsync(
         string scanId,
         IProgress<ScanProgressPayload>? progress = null,
         int? maxDegreeOfParallelism = null,

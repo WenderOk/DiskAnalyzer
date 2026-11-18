@@ -90,7 +90,7 @@ public sealed partial class ScannerViewModel : ViewModelBase
             var progress = new Progress<ScanProgressPayload>(p =>
             {
                 ProgressPercent = p.Percent;
-                IsProgressIndeterminate = p.Percent <= 0;
+                IsProgressIndeterminate = p.Phase == nameof(ScanPhase.Counting);
                 CurrentPath = p.CurrentPath;
                 ProcessedInfo =
                     $"{p.ProcessedFiles:N0} файлов · {p.ProcessedFolders:N0} папок · " +
@@ -116,7 +116,7 @@ public sealed partial class ScannerViewModel : ViewModelBase
                 ct: _cts.Token);
 
             IsProgressIndeterminate = false;
-            ProgressPercent = 100;
+            if (result.Phase == nameof(ScanPhase.Completed)) ProgressPercent = 100;
             Status = PhaseText(result.Phase);
 
             BuildTree(result);
@@ -264,6 +264,7 @@ public sealed partial class ScannerViewModel : ViewModelBase
 
     private static string PhaseText(ScanPhase phase) => phase switch
     {
+        ScanPhase.Counting => "Подсчёт файлов…",
         ScanPhase.Enumerating => "Сканирование",
         ScanPhase.Hashing => "Хеширование",
         ScanPhase.Finalizing => "Завершение",

@@ -7,5 +7,6 @@ public enum ScanPhase
     Finalizing,
     Completed,
     Cancelled,
-    Failed
+    Failed,
+    Counting
 }
