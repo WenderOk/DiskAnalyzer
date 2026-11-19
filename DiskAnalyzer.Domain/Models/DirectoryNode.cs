@@ -8,11 +8,11 @@ public sealed class DirectoryNode
 
     public List<DirectoryNode> Children { get; } = new();
 
-    /// <summary>Размер/количество файлов только в этом каталоге, без потомков.</summary>
+    /// Размер/количество файлов только в этом каталоге, без потомков.
     public FileSize OwnSize { get; set; }
     public long OwnFileCount { get; set; }
 
-    /// <summary>Итоговые значения по каталогу и всем его потомкам.</summary>
+    /// Итоговые значения по каталогу и всем его потомкам
     public FileSize TotalSize { get; set; }
     public long FileCount { get; set; }
     public long FolderCount { get; set; }

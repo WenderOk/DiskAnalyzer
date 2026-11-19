@@ -9,7 +9,7 @@ public sealed class ScanResult
     public required DateTime CompletedAt { get; init; }
     public required ScanPhase Phase { get; init; }
 
-    /// <summary>Плоский список найденных файлов. Нужен для поиска дубликатов и статистики.</summary>
+    /// Плоский список найденных файлов. Нужен для поиска дубликатов и статистики
     public IReadOnlyList<FileEntry> Files { get; init; } = Array.Empty<FileEntry>();
 
     public IReadOnlyList<FileEntry> TopFiles { get; init; } = Array.Empty<FileEntry>();

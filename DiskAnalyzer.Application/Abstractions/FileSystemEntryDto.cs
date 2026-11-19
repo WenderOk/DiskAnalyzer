@@ -1,9 +1,7 @@
 namespace DiskAnalyzer.Application.Abstractions;
 
-/// <summary>
 /// Одна запись каталога (файл или подкаталог). Строковые поля вычисляются
 /// из полного пути, чтобы не дублировать строки в памяти.
-/// </summary>
 public readonly record struct FileSystemEntryDto(
     string FullPath,
     long Size,
